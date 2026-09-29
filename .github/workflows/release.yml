@@ -103,37 +103,6 @@ jobs:
           cd dist/release/windows
           zip -r "../${PACKAGE_NAME}.${VERSION}-window.zip" "${PACKAGE_NAME}.${VERSION}-window"
 
-      - name: Validate Docker Hub secrets
-        env:
-          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-        run: |
-          if [ -z "${DOCKERHUB_USERNAME}" ] || [ -z "${DOCKERHUB_TOKEN}" ]; then
-            echo "::error::Configure DOCKERHUB_USERNAME and DOCKERHUB_TOKEN repository secrets before publishing."
-            exit 1
-          fi
-
-      - name: Setup Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          registry: docker.io
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: docker/Dockerfile
-          platforms: linux/amd64
-          push: true
-          tags: |
-            docker.io/yimuu/dst-panel:${{ steps.release.outputs.version }}
-            docker.io/yimuu/dst-panel:latest
-
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:

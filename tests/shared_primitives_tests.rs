@@ -4,6 +4,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(windows)]
+use std::io::Read;
+
 use dst_admin_rust::{
     infra::command::{
         CommandError, CommandOutput, CommandRunner, CommandSpec, FakeCommandRunner,
@@ -22,6 +25,40 @@ use dst_admin_rust::{
     },
 };
 use tempfile::tempdir;
+
+#[cfg(windows)]
+#[test]
+fn windows_safe_open_serves_regular_files_and_rejects_unsafe_paths() {
+    let dir = tempdir().unwrap();
+    let base = dir.path().join("dist");
+    fs::create_dir_all(base.join("assets")).unwrap();
+    fs::write(base.join("index.html"), "DST Admin").unwrap();
+    fs::write(dir.path().join("secret.txt"), "outside").unwrap();
+
+    let mut file = safe_open_existing_file_under_base(&base, "index.html").unwrap();
+    let mut contents = String::new();
+    file.read_to_string(&mut contents).unwrap();
+    assert_eq!(contents, "DST Admin");
+    assert!(safe_open_optional_existing_file_under_base(&base, "missing.html")
+        .unwrap()
+        .is_none());
+    assert!(safe_open_existing_file_under_base(&base, "assets").is_err());
+    assert!(safe_open_existing_file_under_base(&base, "../secret.txt").is_err());
+
+    // Creating symbolic links can require Developer Mode on Windows. When it
+    // succeeds, both ancestor and leaf links must be rejected.
+    if std::os::windows::fs::symlink_file(
+        dir.path().join("secret.txt"),
+        base.join("secret-link.txt"),
+    )
+    .is_ok()
+    {
+        assert!(safe_open_existing_file_under_base(&base, "secret-link.txt").is_err());
+    }
+    if std::os::windows::fs::symlink_dir(dir.path(), base.join("outside-link")).is_ok() {
+        assert!(safe_open_existing_file_under_base(&base, "outside-link/secret.txt").is_err());
+    }
+}
 
 #[test]
 fn validators_accept_known_safe_values() {

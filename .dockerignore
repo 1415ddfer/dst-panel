@@ -1,4 +1,5 @@
 .git
+.local
 target
 dist
 web-ui/node_modules

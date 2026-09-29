@@ -149,9 +149,9 @@ pub fn safe_ensure_dir_path(path: impl AsRef<Path>) -> Result<(), FsPathError> {
 ///
 /// On Unix this opens each ancestor with `openat` plus
 /// `O_DIRECTORY | O_NOFOLLOW`, then opens the leaf with `O_NOFOLLOW` and
-/// verifies the opened descriptor is a file. That avoids re-opening a checked
-/// pathname after validation. Non-Unix platforms fail closed until an
-/// equivalent handle-based no-follow implementation is added.
+/// verifies the opened descriptor is a file. Windows verifies the final path
+/// of the opened file handle remains beneath the canonical base directory.
+/// Other platforms fail closed until a safe implementation is added.
 pub fn safe_open_existing_file_under_base(
     base: impl AsRef<Path>,
     user_path: impl AsRef<Path>,
@@ -188,9 +188,9 @@ pub fn safe_open_existing_file_path(path: impl AsRef<Path>) -> Result<File, FsPa
 ///
 /// Missing leaves return `Ok(None)` only after every parent component has been
 /// opened or validated without following symlinks. Symlink ancestors, symlink
-/// leaves, non-file leaves, and unsafe paths are errors. Non-Unix platforms
-/// fail closed until an equivalent handle-based no-follow implementation is
-/// added.
+/// leaves, non-file leaves, and unsafe paths are errors. Windows uses the same
+/// handle-path containment check as [`safe_open_existing_file_under_base`].
+/// Other platforms fail closed until a safe implementation is added.
 pub fn safe_open_optional_existing_file_under_base(
     base: impl AsRef<Path>,
     user_path: impl AsRef<Path>,
@@ -471,26 +471,111 @@ fn safe_leaf(path: &Path) -> Result<&str, FsPathError> {
         .ok_or_else(|| FsPathError::new("path must end in a valid UTF-8 directory name"))
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn safe_open_existing_file_under_base_fallback(
+    base: &Path,
+    user_path: &Path,
+) -> Result<File, FsPathError> {
+    safe_open_optional_existing_file_under_base_windows(base, user_path)?
+        .ok_or_else(|| FsPathError::new("file is unavailable"))
+}
+
+#[cfg(windows)]
+fn safe_open_optional_existing_file_under_base_fallback(
+    base: &Path,
+    user_path: &Path,
+) -> Result<Option<File>, FsPathError> {
+    safe_open_optional_existing_file_under_base_windows(base, user_path)
+}
+
+#[cfg(windows)]
+fn safe_open_optional_existing_file_under_base_windows(
+    base: &Path,
+    user_path: &Path,
+) -> Result<Option<File>, FsPathError> {
+    use std::os::windows::fs::MetadataExt;
+
+    let base = base
+        .canonicalize()
+        .map_err(|_| FsPathError::new("base directory is unavailable"))?;
+    let components = safe_relative_components(user_path)?;
+    let mut candidate = base.clone();
+    for component in components {
+        candidate.push(component);
+        let metadata = match candidate.symlink_metadata() {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(_) => return Err(FsPathError::new("path is unavailable")),
+        };
+        // Reject symbolic links, junctions, and other reparse points. The
+        // handle-path check below also protects against a replacement race.
+        if metadata.file_attributes() & 0x400 != 0 {
+            return Err(FsPathError::new("path contains a reparse point"));
+        }
+    }
+
+    let file = match File::open(&candidate) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(FsPathError::new("file is unavailable")),
+    };
+    if !file.metadata().map(|metadata| metadata.is_file()).unwrap_or(false) {
+        return Err(FsPathError::new("path is not a regular file"));
+    }
+    let opened_path = windows_final_path_by_handle(&file)?;
+    if !opened_path.starts_with(&base) {
+        return Err(FsPathError::new("path escapes base directory"));
+    }
+    Ok(Some(file))
+}
+
+#[cfg(windows)]
+fn windows_final_path_by_handle(file: &File) -> Result<PathBuf, FsPathError> {
+    use std::{ffi::OsString, os::windows::{ffi::OsStringExt, io::AsRawHandle}};
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetFinalPathNameByHandleW(
+            file: *mut std::ffi::c_void,
+            path: *mut u16,
+            path_len: u32,
+            flags: u32,
+        ) -> u32;
+    }
+
+    let mut path = vec![0u16; 260];
+    loop {
+        // SAFETY: `file` owns a live handle and `path` is a writable UTF-16
+        // buffer whose length is supplied to the Windows API.
+        let len = unsafe {
+            GetFinalPathNameByHandleW(file.as_raw_handle(), path.as_mut_ptr(), path.len() as u32, 0)
+        };
+        if len == 0 {
+            return Err(FsPathError::new("opened file path is unavailable"));
+        }
+        if (len as usize) < path.len() {
+            return Ok(PathBuf::from(OsString::from_wide(&path[..len as usize])));
+        }
+        path.resize(len as usize + 1, 0);
+    }
+}
+
+#[cfg(all(not(unix), not(windows)))]
 fn safe_open_existing_file_under_base_fallback(
     base: &Path,
     user_path: &Path,
 ) -> Result<File, FsPathError> {
     let _ = (base, user_path);
-    Err(FsPathError::new(
-        "safe file opening is unsupported on this platform",
-    ))
+    Err(FsPathError::new("safe file opening is unsupported on this platform"))
 }
 
-#[cfg(not(unix))]
+#[cfg(all(not(unix), not(windows)))]
 fn safe_open_optional_existing_file_under_base_fallback(
     base: &Path,
     user_path: &Path,
 ) -> Result<Option<File>, FsPathError> {
     let _ = (base, user_path);
-    Err(FsPathError::new(
-        "safe optional file opening is unsupported on this platform",
-    ))
+    Err(FsPathError::new("safe optional file opening is unsupported on this platform"))
 }
 
 #[cfg(not(unix))]

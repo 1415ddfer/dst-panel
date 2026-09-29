@@ -383,7 +383,7 @@ fn github_ci_workflow_checks_frontend_and_rust() {
 }
 
 #[test]
-fn github_release_workflow_builds_artifacts_and_pushes_dockerhub() {
+fn github_release_workflow_builds_binary_artifacts() {
     let workflow = repo_file(".github/workflows/release.yml");
     for expected in [
         "tags:",
@@ -399,12 +399,6 @@ fn github_release_workflow_builds_artifacts_and_pushes_dockerhub() {
         "npm run build",
         "./tools/release/build-linux.sh",
         "./tools/release/build-windows.sh",
-        "file: docker/Dockerfile",
-        "DOCKERHUB_USERNAME",
-        "DOCKERHUB_TOKEN",
-        "docker/login-action",
-        "docker/build-push-action",
-        "docker.io/yimuu/dst-panel",
         "softprops/action-gh-release",
     ] {
         assert!(
@@ -419,6 +413,8 @@ fn github_release_workflow_builds_artifacts_and_pushes_dockerhub() {
     assert!(workflow.contains("${PACKAGE_NAME}.${VERSION}-window.zip"));
     assert!(!workflow.contains("dst-admin-go.1.6.1"));
     assert!(!workflow.contains("FROM node:24-bookworm-slim AS frontend-build"));
+    assert!(!workflow.contains("docker/build-push-action"));
+    assert!(!workflow.contains("DOCKERHUB_TOKEN"));
 }
 
 #[test]
