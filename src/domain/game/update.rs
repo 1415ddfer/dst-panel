@@ -121,6 +121,13 @@ fn steamcmd_invocation(config: &DstConfig) -> AppResult<(std::path::PathBuf, Str
         ));
     }
     let steamcmd_dir = Path::new(&config.steamcmd);
+    if cfg!(windows) {
+        return Ok((
+            steamcmd_dir.to_path_buf(),
+            steamcmd_dir.join("steamcmd.exe").display().to_string(),
+            Vec::new(),
+        ));
+    }
     if config.bin == 86 {
         return Ok((
             steamcmd_dir.to_path_buf(),

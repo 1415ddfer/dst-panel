@@ -13,11 +13,13 @@ use dst_admin_rust::{
         TokioCommandRunner,
     },
     infra::fs_paths::{
-        safe_create_new_file_under_base, safe_ensure_dir_path, safe_ensure_dir_under_base,
-        safe_open_existing_file_path, safe_open_existing_file_under_base,
-        safe_open_optional_existing_file_path, safe_open_optional_existing_file_under_base,
-        safe_overwrite_file_path, safe_overwrite_file_under_base, safe_remove_file_under_base,
-        safe_rename_dir_under_base, safe_resolve_under_base,
+        safe_create_new_file_under_base, safe_directory_exists_under_base, safe_ensure_dir_path,
+        safe_ensure_dir_under_base, safe_open_existing_file_path,
+        safe_open_existing_file_under_base, safe_open_optional_existing_file_path,
+        safe_open_optional_existing_file_under_base, safe_overwrite_file_path,
+        safe_overwrite_file_under_base, safe_remove_dir_all_under_base,
+        safe_remove_file_under_base, safe_rename_dir_under_base, safe_rename_file_under_base,
+        safe_resolve_under_base,
     },
     validation::{
         ValidationError, validate_backup_archive_name, validate_cluster_name, validate_filename,
@@ -25,6 +27,93 @@ use dst_admin_rust::{
     },
 };
 use tempfile::tempdir;
+
+#[cfg(windows)]
+#[test]
+fn windows_safe_filesystem_supports_create_write_move_and_delete() {
+    let dir = tempdir().unwrap();
+    let base = dir.path().join("base");
+    fs::create_dir(&base).unwrap();
+
+    safe_ensure_dir_under_base(&base, "Cluster1/Master").unwrap();
+    assert!(safe_directory_exists_under_base(&base, r"Cluster1\Master").unwrap());
+    assert!(!safe_directory_exists_under_base(&base, "Missing").unwrap());
+
+    let mut marker = safe_create_new_file_under_base(&base, "first.lock").unwrap();
+    marker.write_all(b"locked").unwrap();
+    drop(marker);
+    assert!(safe_create_new_file_under_base(&base, "first.lock").is_err());
+    assert!(safe_remove_file_under_base(&base, "first.lock").unwrap());
+    assert!(!safe_remove_file_under_base(&base, "first.lock").unwrap());
+
+    safe_overwrite_file_under_base(&base, r"Cluster1\Master\server.ini", b"first").unwrap();
+    safe_rename_file_under_base(
+        &base,
+        "Cluster1/Master/server.ini",
+        "Cluster1/Master/renamed.ini",
+    )
+    .unwrap();
+    assert_eq!(
+        fs::read_to_string(base.join("Cluster1/Master/renamed.ini")).unwrap(),
+        "first"
+    );
+    fs::write(base.join("Cluster1/Master/existing.ini"), "keep").unwrap();
+    assert!(
+        safe_rename_file_under_base(
+            &base,
+            "Cluster1/Master/renamed.ini",
+            "Cluster1/Master/existing.ini",
+        )
+        .is_err()
+    );
+    assert_eq!(
+        fs::read_to_string(base.join("Cluster1/Master/existing.ini")).unwrap(),
+        "keep"
+    );
+
+    safe_rename_dir_under_base(&base, "Cluster1", "Cluster2").unwrap();
+    assert!(safe_directory_exists_under_base(&base, "Cluster2/Master").unwrap());
+    safe_remove_dir_all_under_base(&base, "Cluster2").unwrap();
+    assert!(!safe_directory_exists_under_base(&base, "Cluster2").unwrap());
+
+    let external = dir.path().join("configured").join("nested");
+    safe_ensure_dir_path(&external).unwrap();
+    let file = external.join("settings.ini");
+    safe_overwrite_file_path(&file, b"value").unwrap();
+    assert!(safe_open_existing_file_path(&file).is_ok());
+    assert_eq!(fs::read_to_string(file).unwrap(), "value");
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_safe_filesystem_rejects_junction_escape() {
+    let dir = tempdir().unwrap();
+    let base = dir.path().join("base");
+    let outside = dir.path().join("outside");
+    fs::create_dir(&base).unwrap();
+    fs::create_dir(&outside).unwrap();
+    fs::write(outside.join("secret.ini"), "keep").unwrap();
+
+    let junction = base.join("escape");
+    let result = std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(&junction)
+        .arg(&outside)
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "junction creation failed: {result:?}"
+    );
+    assert!(safe_directory_exists_under_base(&base, "escape").is_err());
+    assert!(safe_ensure_dir_under_base(&base, "escape/new").is_err());
+    assert!(safe_overwrite_file_under_base(&base, "escape/secret.ini", b"bad").is_err());
+    assert!(safe_remove_dir_all_under_base(&base, "escape").is_err());
+    assert_eq!(
+        fs::read_to_string(outside.join("secret.ini")).unwrap(),
+        "keep"
+    );
+}
 
 #[cfg(windows)]
 #[test]
@@ -39,9 +128,11 @@ fn windows_safe_open_serves_regular_files_and_rejects_unsafe_paths() {
     let mut contents = String::new();
     file.read_to_string(&mut contents).unwrap();
     assert_eq!(contents, "DST Admin");
-    assert!(safe_open_optional_existing_file_under_base(&base, "missing.html")
-        .unwrap()
-        .is_none());
+    assert!(
+        safe_open_optional_existing_file_under_base(&base, "missing.html")
+            .unwrap()
+            .is_none()
+    );
     assert!(safe_open_existing_file_under_base(&base, "assets").is_err());
     assert!(safe_open_existing_file_under_base(&base, "../secret.txt").is_err());
 
@@ -182,11 +273,22 @@ fn safe_resolver_rejects_absolute_traversal_and_illegal_components() {
     assert!(safe_resolve_under_base(base, "Master/../secret-token").is_err());
     assert!(safe_resolve_under_base(base, "Master/./server.ini").is_err());
     assert!(safe_resolve_under_base(base, "Master/\u{7}secret-token").is_err());
-    assert_backslash_path_rejected(base, r"Master\server.ini");
-    assert_backslash_path_rejected(base, r"Master\.\server.ini");
-    assert_backslash_path_rejected(base, r"Master\\server.ini");
+    #[cfg(not(windows))]
+    {
+        assert_backslash_path_rejected(base, r"Master\server.ini");
+        assert_backslash_path_rejected(base, r"Master\.\server.ini");
+        assert_backslash_path_rejected(base, r"Master\\server.ini");
+    }
+    #[cfg(windows)]
+    {
+        assert!(safe_resolve_under_base(base, r"Master\server.ini").is_ok());
+        assert!(safe_resolve_under_base(base, r"Master\.\server.ini").is_err());
+        assert!(safe_resolve_under_base(base, r"Master\\server.ini").is_err());
+        assert!(safe_resolve_under_base(base, r"Master\..\server.ini").is_err());
+    }
 }
 
+#[cfg(not(windows))]
 fn assert_backslash_path_rejected(base: &std::path::Path, path: &str) {
     let error = safe_resolve_under_base(base, path).unwrap_err();
     assert!(
@@ -658,7 +760,7 @@ fn command_output_debug_redacts_captured_stdout_and_stderr() {
 fn tokio_command_runner_exposes_process_tree_cleanup_support() {
     assert_eq!(
         TokioCommandRunner::process_tree_cleanup_supported(),
-        cfg!(unix),
+        cfg!(unix) || cfg!(windows),
         "external command writes must fail closed without process-tree timeout cleanup"
     );
 }

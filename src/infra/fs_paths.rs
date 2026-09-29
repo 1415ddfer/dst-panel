@@ -19,6 +19,9 @@ use std::{
 
 use thiserror::Error;
 
+#[cfg(windows)]
+mod windows;
+
 /// Error raised when a user path cannot be resolved safely under a base path.
 #[derive(Debug, Clone, Error)]
 #[error("invalid path: {reason}")]
@@ -107,7 +110,12 @@ pub fn safe_directory_exists_under_base(
         safe_directory_exists_under_base_unix(base.as_ref(), user_path.as_ref())
     }
 
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        windows::safe_directory_exists_under_base(base.as_ref(), user_path.as_ref())
+    }
+
+    #[cfg(all(not(unix), not(windows)))]
     {
         let _ = (base, user_path);
         Err(FsPathError::new(
@@ -136,7 +144,12 @@ pub fn safe_ensure_dir_path(path: impl AsRef<Path>) -> Result<(), FsPathError> {
         safe_ensure_dir_under_base(parent, leaf)
     }
 
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        windows::safe_ensure_dir_path(path.as_ref())
+    }
+
+    #[cfg(all(not(unix), not(windows)))]
     {
         let _ = path;
         Err(FsPathError::new(
@@ -161,7 +174,12 @@ pub fn safe_open_existing_file_under_base(
         safe_open_existing_file_under_base_unix(base.as_ref(), user_path.as_ref())
     }
 
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        safe_open_existing_file_under_base_fallback(base.as_ref(), user_path.as_ref())
+    }
+
+    #[cfg(all(not(unix), not(windows)))]
     {
         safe_open_existing_file_under_base_fallback(base.as_ref(), user_path.as_ref())
     }
@@ -175,7 +193,12 @@ pub fn safe_open_existing_file_path(path: impl AsRef<Path>) -> Result<File, FsPa
         safe_open_existing_file_path_unix(path.as_ref())
     }
 
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        windows::safe_open_existing_file_path(path.as_ref())
+    }
+
+    #[cfg(all(not(unix), not(windows)))]
     {
         let _ = path;
         Err(FsPathError::new(
@@ -200,7 +223,12 @@ pub fn safe_open_optional_existing_file_under_base(
         safe_open_optional_existing_file_under_base_unix(base.as_ref(), user_path.as_ref())
     }
 
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        safe_open_optional_existing_file_under_base_fallback(base.as_ref(), user_path.as_ref())
+    }
+
+    #[cfg(all(not(unix), not(windows)))]
     {
         safe_open_optional_existing_file_under_base_fallback(base.as_ref(), user_path.as_ref())
     }
@@ -216,7 +244,12 @@ pub fn safe_open_optional_existing_file_path(
         safe_open_optional_existing_file_path_unix(path.as_ref())
     }
 
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        windows::safe_open_optional_existing_file_path(path.as_ref())
+    }
+
+    #[cfg(all(not(unix), not(windows)))]
     {
         let _ = path;
         Err(FsPathError::new(
@@ -234,9 +267,9 @@ pub fn safe_open_optional_existing_file_path(
 /// workflows should use a separate helper with the same no-follow discipline
 /// instead of resolving first and writing later.
 ///
-/// Non-Unix platforms return an error until a handle-based no-follow
-/// implementation is added. That is intentional: this helper is for safe create
-/// semantics, not best-effort path validation.
+/// Windows uses a capability directory handle to keep traversal beneath the
+/// trusted base. Other platforms fail closed until an equivalent safe create
+/// implementation is added.
 pub fn safe_create_new_file_under_base(
     base: impl AsRef<Path>,
     user_path: impl AsRef<Path>,
@@ -246,7 +279,12 @@ pub fn safe_create_new_file_under_base(
         safe_create_new_file_under_base_unix(base.as_ref(), user_path.as_ref())
     }
 
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        windows::safe_create_new_file_under_base(base.as_ref(), user_path.as_ref())
+    }
+
+    #[cfg(all(not(unix), not(windows)))]
     {
         let _ = (base, user_path);
         Err(FsPathError::new(
@@ -272,7 +310,12 @@ pub fn safe_ensure_dir_under_base(
         safe_ensure_dir_under_base_unix(base.as_ref(), user_path.as_ref())
     }
 
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        windows::safe_ensure_dir_under_base(base.as_ref(), user_path.as_ref())
+    }
+
+    #[cfg(all(not(unix), not(windows)))]
     {
         let _ = (base, user_path);
         Err(FsPathError::new(
@@ -296,7 +339,12 @@ pub fn safe_remove_dir_all_under_base(
         safe_remove_dir_all_under_base_unix(base.as_ref(), user_path.as_ref())
     }
 
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        windows::safe_remove_dir_all_under_base(base.as_ref(), user_path.as_ref())
+    }
+
+    #[cfg(all(not(unix), not(windows)))]
     {
         let _ = (base, user_path);
         Err(FsPathError::new(
@@ -322,7 +370,12 @@ pub fn safe_remove_file_under_base(
         safe_remove_file_under_base_unix(base.as_ref(), user_path.as_ref())
     }
 
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        windows::safe_remove_file_under_base(base.as_ref(), user_path.as_ref())
+    }
+
+    #[cfg(all(not(unix), not(windows)))]
     {
         let _ = (base, user_path);
         Err(FsPathError::new(
@@ -349,7 +402,12 @@ pub fn safe_rename_dir_under_base(
         safe_rename_dir_under_base_unix(base.as_ref(), from_path.as_ref(), to_path.as_ref())
     }
 
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        windows::safe_rename_dir_under_base(base.as_ref(), from_path.as_ref(), to_path.as_ref())
+    }
+
+    #[cfg(all(not(unix), not(windows)))]
     {
         let _ = (base, from_path, to_path);
         Err(FsPathError::new(
@@ -369,7 +427,12 @@ pub fn safe_rename_file_under_base(
         safe_rename_file_under_base_unix(base.as_ref(), from_path.as_ref(), to_path.as_ref())
     }
 
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        windows::safe_rename_file_under_base(base.as_ref(), from_path.as_ref(), to_path.as_ref())
+    }
+
+    #[cfg(all(not(unix), not(windows)))]
     {
         let _ = (base, from_path, to_path);
         Err(FsPathError::new(
@@ -416,7 +479,12 @@ pub fn safe_overwrite_file_path(
         safe_overwrite_file_path_unix(path.as_ref(), contents.as_ref())
     }
 
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        windows::safe_overwrite_file_path(path.as_ref(), contents.as_ref())
+    }
+
+    #[cfg(all(not(unix), not(windows)))]
     {
         let _ = (path, contents);
         Err(FsPathError::new(
@@ -438,7 +506,7 @@ fn safe_directory_path_exists_inner(path: &Path) -> Result<bool, FsPathError> {
     }
     match path.symlink_metadata() {
         Ok(metadata) => {
-            if metadata.file_type().is_symlink() {
+            if metadata.file_type().is_symlink() || windows_reparse_point(&metadata) {
                 return Err(FsPathError::new("directory path contains a symlink"));
             }
             if metadata.is_dir() {
@@ -519,7 +587,11 @@ fn safe_open_optional_existing_file_under_base_windows(
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(_) => return Err(FsPathError::new("file is unavailable")),
     };
-    if !file.metadata().map(|metadata| metadata.is_file()).unwrap_or(false) {
+    if !file
+        .metadata()
+        .map(|metadata| metadata.is_file())
+        .unwrap_or(false)
+    {
         return Err(FsPathError::new("path is not a regular file"));
     }
     let opened_path = windows_final_path_by_handle(&file)?;
@@ -531,7 +603,16 @@ fn safe_open_optional_existing_file_under_base_windows(
 
 #[cfg(windows)]
 fn windows_final_path_by_handle(file: &File) -> Result<PathBuf, FsPathError> {
-    use std::{ffi::OsString, os::windows::{ffi::OsStringExt, io::AsRawHandle}};
+    use std::os::windows::io::AsRawHandle;
+
+    windows_final_path_by_raw_handle(file.as_raw_handle())
+}
+
+#[cfg(windows)]
+pub(super) fn windows_final_path_by_raw_handle(
+    handle: std::os::windows::io::RawHandle,
+) -> Result<PathBuf, FsPathError> {
+    use std::{ffi::OsString, os::windows::ffi::OsStringExt};
 
     #[link(name = "kernel32")]
     unsafe extern "system" {
@@ -545,11 +626,10 @@ fn windows_final_path_by_handle(file: &File) -> Result<PathBuf, FsPathError> {
 
     let mut path = vec![0u16; 260];
     loop {
-        // SAFETY: `file` owns a live handle and `path` is a writable UTF-16
+        // SAFETY: the caller keeps `handle` live and `path` is a writable UTF-16
         // buffer whose length is supplied to the Windows API.
-        let len = unsafe {
-            GetFinalPathNameByHandleW(file.as_raw_handle(), path.as_mut_ptr(), path.len() as u32, 0)
-        };
+        let len =
+            unsafe { GetFinalPathNameByHandleW(handle, path.as_mut_ptr(), path.len() as u32, 0) };
         if len == 0 {
             return Err(FsPathError::new("opened file path is unavailable"));
         }
@@ -566,7 +646,9 @@ fn safe_open_existing_file_under_base_fallback(
     user_path: &Path,
 ) -> Result<File, FsPathError> {
     let _ = (base, user_path);
-    Err(FsPathError::new("safe file opening is unsupported on this platform"))
+    Err(FsPathError::new(
+        "safe file opening is unsupported on this platform",
+    ))
 }
 
 #[cfg(all(not(unix), not(windows)))]
@@ -575,10 +657,21 @@ fn safe_open_optional_existing_file_under_base_fallback(
     user_path: &Path,
 ) -> Result<Option<File>, FsPathError> {
     let _ = (base, user_path);
-    Err(FsPathError::new("safe optional file opening is unsupported on this platform"))
+    Err(FsPathError::new(
+        "safe optional file opening is unsupported on this platform",
+    ))
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn safe_overwrite_file_under_base_fallback(
+    base: &Path,
+    user_path: &Path,
+    contents: &[u8],
+) -> Result<(), FsPathError> {
+    windows::safe_overwrite_file_under_base(base, user_path, contents)
+}
+
+#[cfg(all(not(unix), not(windows)))]
 fn safe_overwrite_file_under_base_fallback(
     base: &Path,
     user_path: &Path,
@@ -1503,6 +1596,7 @@ fn absolute_normal_components(path: &Path) -> Result<Vec<String>, FsPathError> {
     Ok(parts)
 }
 
+#[cfg(not(windows))]
 fn validate_absolute_path(path: &Path) -> Result<(), FsPathError> {
     if !path.is_absolute() {
         return Err(FsPathError::new("directory path must be absolute"));
@@ -1563,6 +1657,43 @@ fn validate_absolute_path(path: &Path) -> Result<(), FsPathError> {
     Ok(())
 }
 
+#[cfg(windows)]
+fn validate_absolute_path(path: &Path) -> Result<(), FsPathError> {
+    if !path.is_absolute() {
+        return Err(FsPathError::new("directory path must be absolute"));
+    }
+    let raw = path
+        .to_str()
+        .ok_or_else(|| FsPathError::new("path must be valid UTF-8"))?;
+    if raw
+        .split(['/', '\\'])
+        .any(|part| part == "." || part == "..")
+    {
+        return Err(FsPathError::new("relative components are not allowed"));
+    }
+    let mut normal_components = 0;
+    for component in path.components() {
+        match component {
+            Component::Normal(value) => {
+                validate_component(
+                    value
+                        .to_str()
+                        .ok_or_else(|| FsPathError::new("path must be valid UTF-8"))?,
+                )?;
+                normal_components += 1;
+            }
+            Component::RootDir | Component::Prefix(_) => {}
+            Component::CurDir | Component::ParentDir => {
+                return Err(FsPathError::new("relative components are not allowed"));
+            }
+        }
+    }
+    if normal_components == 0 && path.parent().is_none() {
+        return Err(FsPathError::new("path cannot be empty"));
+    }
+    Ok(())
+}
+
 fn reject_normalized_away_components(path: &Path) -> Result<(), FsPathError> {
     let raw = path
         .to_str()
@@ -1570,10 +1701,9 @@ fn reject_normalized_away_components(path: &Path) -> Result<(), FsPathError> {
     if raw.is_empty() {
         return Err(FsPathError::new("path cannot be empty"));
     }
-    // Reject backslashes before `Path::components()` can apply platform
-    // semantics. Windows treats `\` as a separator, while Unix treats it as a
-    // normal byte, so accepting it would make the safety policy OS-dependent.
-    if raw.contains('\\') {
+    // Unix treats backslashes as ordinary filename bytes, unlike Windows.
+    // Reject them there so a checked path cannot change meaning across hosts.
+    if !cfg!(windows) && raw.contains('\\') {
         return Err(FsPathError::new(
             "backslash path separators are not allowed",
         ));
@@ -1602,5 +1732,19 @@ fn validate_component(value: &str) -> Result<(), FsPathError> {
     {
         return Err(FsPathError::new("path contains unsafe characters"));
     }
+    if cfg!(windows) && (value.contains(':') || value.ends_with('.') || value.ends_with(' ')) {
+        return Err(FsPathError::new("path contains unsafe Windows characters"));
+    }
     Ok(())
+}
+
+#[cfg(windows)]
+fn windows_reparse_point(metadata: &std::fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    metadata.file_attributes() & 0x400 != 0
+}
+
+#[cfg(not(windows))]
+fn windows_reparse_point(_metadata: &std::fs::Metadata) -> bool {
+    false
 }

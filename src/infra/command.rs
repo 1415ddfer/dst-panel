@@ -205,9 +205,8 @@ impl TokioCommandRunner {
     /// Returns whether timeout cleanup can terminate descendants of a command.
     ///
     /// Write-heavy operations such as SteamCMD updates and DST starts must not
-    /// keep running after the HTTP request reports a timeout. Non-Unix support
-    /// should be enabled only after an equivalent job-object/process-tree
-    /// cleanup implementation is added.
+    /// keep running after the HTTP request reports a timeout. Windows commands
+    /// are placed in a Job Object that also terminates descendants on close.
     pub fn process_tree_cleanup_supported() -> bool {
         process_tree_cleanup_supported()
     }
@@ -243,11 +242,20 @@ impl TokioCommandRunner {
             .kill_on_drop(true);
         configure_process_isolation(&mut command);
 
+        #[cfg(windows)]
+        let job = WindowsJob::new().map_err(CommandError::Spawn)?;
+
         let mut child = command.spawn().map_err(|err| {
             tracing::warn!(program = %spec.program, error = %err, "external command failed to start");
             CommandError::Spawn(err)
         })?;
         let child_id = child.id();
+        #[cfg(windows)]
+        if let Err(error) = job.assign(child_id) {
+            let _ = child.start_kill();
+            let _ = child.wait().await;
+            return Err(CommandError::Spawn(error));
+        }
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
         let stdout_task = tokio::spawn(read_optional_bounded(stdout, spec.output_limit, "stdout"));
@@ -258,6 +266,8 @@ impl TokioCommandRunner {
                 Ok(status) => status.map_err(CommandError::Output)?,
                 Err(_) => {
                     tracing::warn!(program = %spec.program, "external command timed out");
+                    #[cfg(windows)]
+                    job.terminate();
                     terminate_child(&mut child, child_id, &spec.program).await;
                     drain_output_after_timeout(stdout_task, stderr_task, &spec.program).await;
                     return Err(CommandError::Timeout);
@@ -266,6 +276,9 @@ impl TokioCommandRunner {
         } else {
             child.wait().await.map_err(CommandError::Output)?
         };
+
+        #[cfg(windows)]
+        drop(job);
 
         let stdout = stdout_task
             .await
@@ -439,8 +452,7 @@ fn configure_process_isolation(command: &mut tokio::process::Command) {
 
 #[cfg(not(unix))]
 fn configure_process_isolation(_command: &mut tokio::process::Command) {
-    // Windows job-object cleanup is implemented in the later process-control
-    // slice. `run_inner` refuses to spawn before this fallback can be reached.
+    // Windows process isolation is established by WindowsJob after spawn.
 }
 
 #[cfg(unix)]
@@ -448,7 +460,12 @@ fn process_tree_cleanup_supported() -> bool {
     true
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn process_tree_cleanup_supported() -> bool {
+    true
+}
+
+#[cfg(all(not(unix), not(windows)))]
 fn process_tree_cleanup_supported() -> bool {
     false
 }
@@ -479,12 +496,97 @@ fn terminate_process_group(child_id: Option<u32>, program: &str) {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn terminate_process_group(_child_id: Option<u32>, _program: &str) {}
+
+#[cfg(all(not(unix), not(windows)))]
 fn terminate_process_group(_child_id: Option<u32>, program: &str) {
     tracing::warn!(
         program = %program,
         "process-group timeout cleanup is unavailable on this platform"
     );
+}
+
+#[cfg(windows)]
+struct WindowsJob(windows_sys::Win32::Foundation::HANDLE);
+
+#[cfg(windows)]
+// HANDLE belongs solely to this job; WindowsJob closes it in Drop.
+unsafe impl Send for WindowsJob {}
+
+#[cfg(windows)]
+impl WindowsJob {
+    fn new() -> std::io::Result<Self> {
+        use windows_sys::Win32::System::JobObjects::{
+            CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+            SetInformationJobObject,
+        };
+
+        // SAFETY: null security attributes and name request a private job.
+        let handle = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+        if handle.is_null() {
+            return Err(std::io::Error::last_os_error());
+        }
+        let job = Self(handle);
+        let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        // SAFETY: limits is a valid structure of the size supplied here.
+        let ok = unsafe {
+            SetInformationJobObject(
+                job.0,
+                JobObjectExtendedLimitInformation,
+                &limits as *const _ as *const std::ffi::c_void,
+                std::mem::size_of_val(&limits) as u32,
+            )
+        };
+        if ok == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(job)
+    }
+
+    fn assign(&self, child_id: Option<u32>) -> std::io::Result<()> {
+        use windows_sys::Win32::System::{
+            JobObjects::AssignProcessToJobObject,
+            Threading::{OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE},
+        };
+
+        let pid = child_id.ok_or_else(|| std::io::Error::other("child process ID unavailable"))?;
+        // SAFETY: pid identifies the child just spawned by this command.
+        let process = unsafe { OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, pid) };
+        if process.is_null() {
+            return Err(std::io::Error::last_os_error());
+        }
+        // SAFETY: both handles are valid for the duration of this call.
+        let ok = unsafe { AssignProcessToJobObject(self.0, process) };
+        let error = if ok == 0 {
+            Some(std::io::Error::last_os_error())
+        } else {
+            None
+        };
+        // SAFETY: process was opened above and is no longer needed.
+        unsafe { windows_sys::Win32::Foundation::CloseHandle(process) };
+        match error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+
+    fn terminate(&self) {
+        // SAFETY: self.0 is a live Job Object handle.
+        if unsafe { windows_sys::Win32::System::JobObjects::TerminateJobObject(self.0, 1) } == 0 {
+            tracing::warn!(error = %std::io::Error::last_os_error(), "failed to terminate command job");
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for WindowsJob {
+    fn drop(&mut self) {
+        // SAFETY: this is the unique owner of the handle.
+        unsafe { windows_sys::Win32::Foundation::CloseHandle(self.0) };
+    }
 }
 
 impl CommandRunner for TokioCommandRunner {

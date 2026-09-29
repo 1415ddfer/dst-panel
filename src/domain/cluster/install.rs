@@ -81,7 +81,12 @@ fn install_spec(steam_cmd: &Path, force_install_dir: &Path) -> AppResult<Command
     reject_nul_path("steamcmd", steam_cmd)?;
     reject_nul_path("force_install_dir", force_install_dir)?;
 
-    Ok(CommandSpec::new("./steamcmd.sh")
+    let program = if cfg!(windows) {
+        "steamcmd.exe"
+    } else {
+        "./steamcmd.sh"
+    };
+    Ok(CommandSpec::new(program)
         .with_current_dir(PathBuf::from(steam_cmd))
         .arg("+login")
         .arg("anonymous")

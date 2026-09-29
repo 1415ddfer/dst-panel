@@ -50,8 +50,8 @@ jobs:
       - name: Run Rust tests
         run: cargo test --locked
 
-  windows-static:
-    name: Windows static files
+  windows-rust:
+    name: Windows Rust
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -63,11 +63,8 @@ jobs:
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
 
-      - name: Test static routes
-        run: cargo test --locked --test http_tests static_
-
-      - name: Test Windows file opening
-        run: cargo test --locked --test shared_primitives_tests windows_safe_open_
+      - name: Run Rust tests
+        run: cargo test --locked
 
       - name: Build Windows binary
         run: cargo build --locked --release --bin dst-admin-rust
