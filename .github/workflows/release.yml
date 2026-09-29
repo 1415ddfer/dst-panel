@@ -23,7 +23,7 @@ jobs:
           $version = '${{ github.ref_name }}'.TrimStart('v')
           if (-not $version -or $version -eq '${{ github.ref_name }}') {
             throw 'Release tags must use v<version>.'
-          fi
+          }
           "version=$version" >> $env:GITHUB_OUTPUT
           "windows_archive=dst-panel.$version-windows.zip" >> $env:GITHUB_OUTPUT
 
