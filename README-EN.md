@@ -5,6 +5,8 @@
 
 **Now supports both Windows and Linux platforms**
 
+For Windows, download the `-windows.zip` release and follow the [Windows setup guide](docs/WINDOWS.md).
+
 ## About
 
 DST Admin Rust is the Rust 2024 migration of the web-based management panel for "Don't Starve Together" dedicated servers. Target binary: `dst-admin-rust`. Key features include:

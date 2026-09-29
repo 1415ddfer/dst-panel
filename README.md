@@ -27,6 +27,8 @@ DST Admin Rust 是一个使用 Rust 2024 迁移实现的《饥荒联机版》服
 
 点击查看 [部署文档](docs/install.md)
 
+Windows 用户可直接使用 [Windows 部署说明](docs/WINDOWS.md) 和 GitHub Release 中的 `-windows.zip` 包。
+
 ## 预览
 
 ![首页效果](docs/image/dashboard.png)
