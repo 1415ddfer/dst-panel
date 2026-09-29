@@ -8,7 +8,7 @@
 use std::{
     fs, io,
     io::Read,
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
 };
 
 use axum::{
@@ -138,8 +138,8 @@ fn open_dist_asset(root_path: &Path, request_path: &str) -> AppResult<Option<Ope
     };
 
     let dist_root = root_path.join("dist");
-    let display_path = dist_root.join(&relative_path);
-    let file = match safe_open_existing_file_under_base(&dist_root, &relative_path) {
+    let display_path = dist_root.join(relative_path);
+    let file = match safe_open_existing_file_under_base(&dist_root, relative_path) {
         Ok(file) => file,
         Err(error) => {
             tracing::info!(
@@ -174,29 +174,18 @@ fn read_static_asset_body(mut file: fs::File) -> io::Result<Vec<u8>> {
     Ok(contents)
 }
 
-fn safe_relative_static_path(request_path: &str) -> Option<PathBuf> {
+fn safe_relative_static_path(request_path: &str) -> Option<&str> {
     let path_without_leading_slash = request_path.strip_prefix('/')?;
-    if path_without_leading_slash.is_empty() {
+    if path_without_leading_slash.is_empty()
+        || contains_encoded_static_path_escape(path_without_leading_slash)
+        || path_without_leading_slash.contains('\\')
+        || path_without_leading_slash
+            .split('/')
+            .any(|part| part.is_empty() || part == "." || part == ".." || part.contains(':'))
+    {
         return None;
     }
-    if contains_encoded_static_path_escape(path_without_leading_slash) {
-        return None;
-    }
-
-    let mut safe_path = PathBuf::new();
-    for component in Path::new(path_without_leading_slash).components() {
-        match component {
-            Component::Normal(part) => safe_path.push(part),
-            Component::CurDir
-            | Component::ParentDir
-            | Component::RootDir
-            | Component::Prefix(_) => {
-                return None;
-            }
-        }
-    }
-
-    (!safe_path.as_os_str().is_empty()).then_some(safe_path)
+    Some(path_without_leading_slash)
 }
 
 fn contains_encoded_static_path_escape(path: &str) -> bool {

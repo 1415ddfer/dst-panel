@@ -298,6 +298,25 @@ async fn static_asset_routes_serve_files_from_dist_when_present() {
     assert_eq!(response_text(response).await, "console.log('dst-admin');");
 }
 
+#[cfg(windows)]
+#[tokio::test]
+async fn windows_static_asset_routes_serve_hashed_frontend_files() {
+    let (app, dir) = test_router().await;
+    let assets = dir.path().join("dist").join("assets");
+    fs::create_dir_all(&assets).unwrap();
+    fs::write(assets.join("index-_7jwq284.css"), "body{}").unwrap();
+    fs::write(assets.join("index-Bs3UfZZe.js"), "console.log('ok')").unwrap();
+
+    for (uri, expected) in [
+        ("/assets/index-_7jwq284.css", "body{}"),
+        ("/assets/index-Bs3UfZZe.js", "console.log('ok')"),
+    ] {
+        let response = send(&app, Method::GET, uri, None, None).await;
+        assert_eq!(response.status(), StatusCode::OK, "{uri}");
+        assert_eq!(response_text(response).await, expected);
+    }
+}
+
 #[tokio::test]
 async fn static_asset_head_routes_return_headers_without_body() {
     let (app, dir) = test_router().await;
