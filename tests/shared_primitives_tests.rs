@@ -7,6 +7,8 @@ use std::{
 #[cfg(windows)]
 use std::io::Read;
 
+#[cfg(windows)]
+use dst_admin_rust::infra::process::{ProcessSnapshotProvider, SystemProcessSnapshotProvider};
 use dst_admin_rust::{
     infra::command::{
         CommandError, CommandOutput, CommandRunner, CommandSpec, FakeCommandRunner,
@@ -112,6 +114,17 @@ fn windows_safe_filesystem_rejects_junction_escape() {
     assert_eq!(
         fs::read_to_string(outside.join("secret.ini")).unwrap(),
         "keep"
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_process_snapshots_include_the_running_panel_test() {
+    let snapshots = SystemProcessSnapshotProvider.snapshots().unwrap();
+    assert!(
+        snapshots
+            .iter()
+            .any(|snapshot| snapshot.pid == Some(std::process::id()))
     );
 }
 
