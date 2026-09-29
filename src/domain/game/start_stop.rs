@@ -386,7 +386,14 @@ fn launch_level_spec(
             .arg("-persistent_storage_root")
             .arg(root.join(".klei").display().to_string());
     }
-    if !context.config.conf_dir.is_empty() {
+    if cfg!(windows) && context.config.beta == 1 {
+        let base = if context.config.conf_dir.is_empty() {
+            "DoNotStarveTogether"
+        } else {
+            &context.config.conf_dir
+        };
+        spec = spec.arg("-conf_dir").arg(format!("{base}BetaBranch"));
+    } else if !context.config.conf_dir.is_empty() {
         spec = spec.arg("-conf_dir").arg(&context.config.conf_dir);
     }
     Ok(spec.with_timeout(COMMAND_TIMEOUT))

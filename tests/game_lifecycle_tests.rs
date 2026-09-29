@@ -61,12 +61,20 @@ async fn start_and_stop_level_routes_use_safe_argv_and_legacy_messages() {
         response_json(started).await,
         json!({"code": 200, "msg": "start ClusterLife Master success", "data": null})
     );
+    #[cfg(unix)]
+    {
+        assert_eq!(
+            fs::read_to_string(&steam_target).unwrap(),
+            "new-steamclient"
+        );
+        assert_eq!(
+            fs::read_to_string(steam_target.with_file_name("steamclient.so.bak")).unwrap(),
+            "old-steamclient"
+        );
+    }
+    #[cfg(windows)]
     assert_eq!(
         fs::read_to_string(&steam_target).unwrap(),
-        "new-steamclient"
-    );
-    assert_eq!(
-        fs::read_to_string(steam_target.with_file_name("steamclient.so.bak")).unwrap(),
         "old-steamclient"
     );
 
@@ -89,12 +97,12 @@ async fn start_and_stop_level_routes_use_safe_argv_and_legacy_messages() {
             .args()
             .contains(&"DST_8level_ClusterLife_Master".to_owned())
     );
-    assert!(
-        calls[1]
-            .args()
-            .iter()
-            .any(|arg| arg == "./dontstarve_dedicated_server_nullrenderer_x64")
-    );
+    assert!(calls[1].args().iter().any(|arg| arg
+        == if cfg!(windows) {
+            "dontstarve_dedicated_server_nullrenderer_x64.exe"
+        } else {
+            "./dontstarve_dedicated_server_nullrenderer_x64"
+        }));
     assert!(
         calls[1]
             .args()
@@ -108,6 +116,12 @@ async fn start_and_stop_level_routes_use_safe_argv_and_legacy_messages() {
             .any(|args| args == ["-shard", "Master"])
     );
     assert_no_shell(&calls[1]);
+    #[cfg(windows)]
+    assert!(calls[1].args().windows(2).any(|args| args
+        == [
+            "-persistent_storage_root",
+            dir.path().join(".klei").to_str().unwrap()
+        ]));
 
     let stopped = send(
         &app,
@@ -239,12 +253,12 @@ async fn start_all_and_stop_all_follow_level_index_order() {
         "DST_8level_ClusterAll_Caves",
         "c_shutdown(true)\n",
     );
-    assert!(
-        calls[2]
-            .args()
-            .iter()
-            .any(|arg| arg == "./dontstarve_dedicated_server_nullrenderer_x64_luajit")
-    );
+    assert!(calls[2].args().iter().any(|arg| arg
+        == if cfg!(windows) {
+            "dontstarve_dedicated_server_nullrenderer_x64.exe"
+        } else {
+            "./dontstarve_dedicated_server_nullrenderer_x64_luajit"
+        }));
     assert!(
         calls[2]
             .args()
@@ -441,7 +455,7 @@ async fn update_game_does_not_run_steamcmd_when_stop_barrier_still_sees_process(
         "DST_8level_ClusterStrictUpdate_Master",
         "c_shutdown(true)\n",
     );
-    assert_eq!(calls[1].program(), "kill");
+    assert_kill_call(&calls[1], 77_001);
     assert!(
         !calls
             .iter()
@@ -524,8 +538,7 @@ async fn stop_level_runs_safe_kill_fallback_for_matching_process() {
         "DST_8level_ClusterKillFallback_Master",
         "c_shutdown(true)\n",
     );
-    assert_eq!(calls[1].program(), "kill");
-    assert_eq!(calls[1].args(), ["-9", "12345"]);
+    assert_kill_call(&calls[1], 12_345);
     assert_no_shell(&calls[1]);
 }
 
@@ -598,8 +611,7 @@ async fn stop_level_kills_only_the_matched_process_pid_after_grace_period() {
         "DST_8level_ClusterPidKill_Master",
         "c_shutdown(true)\n",
     );
-    assert_eq!(calls[1].program(), "kill");
-    assert_eq!(calls[1].args(), ["-9", "54321"]);
+    assert_kill_call(&calls[1], 54_321);
     assert_no_shell(&calls[1]);
 }
 
@@ -1007,6 +1019,17 @@ impl ProcessSnapshotProvider for FakeProcessSnapshotProvider {
             return Ok(snapshots.pop_front().unwrap());
         }
         Ok(snapshots.front().cloned().unwrap_or_default())
+    }
+}
+
+fn assert_kill_call(spec: &CommandSpec, pid: u32) {
+    let pid = pid.to_string();
+    if cfg!(windows) {
+        assert_eq!(spec.program(), "taskkill.exe");
+        assert_eq!(spec.args(), ["/PID", pid.as_str(), "/T", "/F"]);
+    } else {
+        assert_eq!(spec.program(), "kill");
+        assert_eq!(spec.args(), ["-9", pid.as_str()]);
     }
 }
 

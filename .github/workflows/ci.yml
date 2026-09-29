@@ -68,8 +68,8 @@ jobs:
         run: |
           cargo test --locked --quiet --no-fail-fast 2>&1 | Tee-Object -FilePath cargo-test.log
           if ($LASTEXITCODE -ne 0) {
-            Select-String -Path cargo-test.log -Pattern 'FAILED|panicked at|error: test failed' |
-              Select-Object -Last 30 |
+            Select-String -Path cargo-test.log -CaseSensitive -Pattern '--- FAILED|panicked at|error: test failed' |
+              Select-Object -Last 50 |
               ForEach-Object { Write-Output "::error::$($_.Line)" }
             $tail = (Get-Content cargo-test.log -Tail 35) -join '%0A'
             Write-Output "::error::$tail"

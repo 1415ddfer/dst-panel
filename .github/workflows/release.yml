@@ -67,9 +67,9 @@ jobs:
           $packageDir = 'dist/release/dst-panel.${{ steps.release.outputs.version }}-windows'
           New-Item -ItemType Directory -Force $packageDir | Out-Null
           Copy-Item target/release/dst-admin-rust.exe,config.yml $packageDir
-          Copy-Item docker/dst_config (Join-Path $packageDir 'dst_config')
           Copy-Item static (Join-Path $packageDir 'static') -Recurse
           Copy-Item web-ui/dist (Join-Path $packageDir 'dist') -Recurse
+          Copy-Item docs/WINDOWS.md (Join-Path $packageDir 'WINDOWS.md')
           Compress-Archive -Path $packageDir -DestinationPath 'dist/release/${{ steps.release.outputs.windows_archive }}'
 
       - name: Publish GitHub Release
