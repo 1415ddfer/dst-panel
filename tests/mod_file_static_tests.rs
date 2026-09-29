@@ -703,7 +703,11 @@ async fn mod_put_redownloads_and_reparses_modinfo_after_cache_delete() {
         .join("mod-download/steamapps/workshop/content/322330/123456");
     fs::create_dir_all(&old_dir).unwrap();
     fs::write(old_dir.join("modinfo.lua"), modinfo_lua("Seed Mod")).unwrap();
-    let steamcmd64 = dir.path().join("steamcmd/linux64/steamcmd");
+    let steamcmd64 = dir.path().join(if cfg!(windows) {
+        "steamcmd/steamcmd.exe"
+    } else {
+        "steamcmd/linux64/steamcmd"
+    });
     fs::create_dir_all(steamcmd64.parent().unwrap()).unwrap();
     fs::write(&steamcmd64, "").unwrap();
 
@@ -720,7 +724,11 @@ async fn mod_put_redownloads_and_reparses_modinfo_after_cache_delete() {
 
     let calls = command_runner.calls();
     assert_eq!(calls.len(), 1);
-    assert!(calls[0].program().ends_with("steamcmd/linux64/steamcmd"));
+    assert!(calls[0].program().ends_with(if cfg!(windows) {
+        "steamcmd\\steamcmd.exe"
+    } else {
+        "steamcmd/linux64/steamcmd"
+    }));
     assert!(
         calls[0]
             .args()

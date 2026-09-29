@@ -368,7 +368,14 @@ async fn cluster_create_installs_dst_when_force_install_dir_is_missing() {
     let calls = calls.calls();
     assert_eq!(calls.len(), 1);
     let call = &calls[0];
-    assert_eq!(call.program(), "./steamcmd.sh");
+    assert_eq!(
+        call.program(),
+        if cfg!(windows) {
+            "steamcmd.exe"
+        } else {
+            "./steamcmd.sh"
+        }
+    );
     assert_ne!(call.program(), "sh");
     assert_ne!(call.program(), "bash");
     assert_eq!(call.current_dir(), Some(steamcmd.as_path()));
