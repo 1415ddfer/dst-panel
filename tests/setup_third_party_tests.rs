@@ -101,19 +101,35 @@ async fn init_post_writes_user_info_first_marker_and_base_cluster_files() {
 
 #[tokio::test]
 async fn install_steamcmd_streams_events_and_uses_fake_command_runner() {
+    #[cfg(windows)]
+    let http_responses = {
+        let mut cursor = std::io::Cursor::new(Vec::new());
+        let mut writer = zip::ZipWriter::new(&mut cursor);
+        writer
+            .start_file("steamcmd.exe", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        std::io::Write::write_all(&mut writer, b"fake executable").unwrap();
+        writer.finish().unwrap();
+        vec![HttpResponse::new(200).body(cursor.into_inner())]
+    };
+    #[cfg(not(windows))]
+    let http_responses = Vec::new();
     let (app, dir, _http, commands) = test_router(
-        Vec::new(),
+        http_responses,
         vec![CommandOutput::success(
             b"install ok\n".to_vec(),
             b"warning line\n".to_vec(),
         )],
     )
     .await;
-    let script_path = dir.path().join("static/script/install_steamcmd.sh");
-    fs::create_dir_all(script_path.parent().unwrap()).unwrap();
-    fs::write(&script_path, "#!/bin/sh\necho ok\n").unwrap();
     #[cfg(unix)]
-    fs::set_permissions(&script_path, fs::Permissions::from_mode(0o644)).unwrap();
+    let script_path = dir.path().join("static/script/install_steamcmd.sh");
+    #[cfg(unix)]
+    {
+        fs::create_dir_all(script_path.parent().unwrap()).unwrap();
+        fs::write(&script_path, "#!/bin/sh\necho ok\n").unwrap();
+        fs::set_permissions(&script_path, fs::Permissions::from_mode(0o644)).unwrap();
+    }
 
     let response = send(&app, Method::GET, "/api/install/steamcmd", None, None).await;
 
@@ -134,11 +150,17 @@ async fn install_steamcmd_streams_events_and_uses_fake_command_runner() {
 
     let calls = commands.calls();
     assert_eq!(calls.len(), 1);
+    #[cfg(unix)]
     assert!(
         calls[0]
             .program()
             .ends_with("static/script/install_steamcmd.sh")
     );
+    #[cfg(windows)]
+    assert!(calls[0].program().ends_with("steamcmd\\steamcmd.exe"));
+    #[cfg(windows)]
+    assert!(dir.path().join("steamcmd/steamcmd.exe").is_file());
+    #[cfg(unix)]
     assert_eq!(
         calls[0].args(),
         &[
@@ -146,6 +168,8 @@ async fn install_steamcmd_streams_events_and_uses_fake_command_runner() {
             dir.path().display().to_string()
         ]
     );
+    #[cfg(windows)]
+    assert_eq!(calls[0].args()[0], "+force_install_dir");
     #[cfg(unix)]
     assert_ne!(
         fs::metadata(&script_path).unwrap().permissions().mode() & 0o100,

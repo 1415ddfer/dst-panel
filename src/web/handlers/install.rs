@@ -14,6 +14,9 @@ use std::{
     time::Duration,
 };
 
+#[cfg(windows)]
+use std::io::Read;
+
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
@@ -35,6 +38,8 @@ use crate::{
 };
 
 const INSTALL_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+#[cfg(windows)]
+const WINDOWS_STEAMCMD_URL: &str = "https://steamcdn-a.akamaihd.net/client/installer/steamcmd.zip";
 static INSTALL_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 
 /// Installs SteamCMD and returns Go-compatible SSE event text.
@@ -57,27 +62,41 @@ pub(crate) async fn install_steamcmd_handler(
     let mut events = String::new();
     append_event(&mut events, "正在安装steamcmd。。。");
 
-    let root_path = state.root_path.display().to_string();
-    let script_path = state
-        .root_path
-        .join("static")
-        .join("script")
-        .join("install_steamcmd.sh");
-    if let Err(error) = ensure_script_executable(&script_path) {
-        append_event(&mut events, "安装steamcmd失败！！！");
-        append_event(&mut events, "end");
-        tracing::warn!(
-            script_path = %script_path.display(),
-            error = %error,
-            "failed to prepare SteamCMD install script"
-        );
-        return build_sse_response(events);
-    }
+    #[cfg(windows)]
+    let spec = match prepare_windows_steamcmd(&state).await {
+        Ok(spec) => spec,
+        Err(error) => {
+            append_event(&mut events, "安装steamcmd失败！！！");
+            append_event(&mut events, "end");
+            tracing::warn!(error = %error, "failed to prepare Windows SteamCMD installation");
+            return build_sse_response(events);
+        }
+    };
 
-    let spec = CommandSpec::new(script_path.display().to_string())
-        .arg(root_path.clone())
-        .arg(root_path)
-        .with_timeout(INSTALL_TIMEOUT);
+    #[cfg(not(windows))]
+    let spec = {
+        let root_path = state.root_path.display().to_string();
+        let script_path = state
+            .root_path
+            .join("static")
+            .join("script")
+            .join("install_steamcmd.sh");
+        if let Err(error) = ensure_script_executable(&script_path) {
+            append_event(&mut events, "安装steamcmd失败！！！");
+            append_event(&mut events, "end");
+            tracing::warn!(
+                script_path = %script_path.display(),
+                error = %error,
+                "failed to prepare SteamCMD install script"
+            );
+            return build_sse_response(events);
+        }
+
+        CommandSpec::new(script_path.display().to_string())
+            .arg(root_path.clone())
+            .arg(root_path)
+            .with_timeout(INSTALL_TIMEOUT)
+    };
 
     tracing::info!("starting SteamCMD installation script");
     match state.command_runner.run(spec).await {
@@ -124,6 +143,54 @@ pub(crate) async fn install_steamcmd_handler(
     }
 
     build_sse_response(events)
+}
+
+#[cfg(windows)]
+async fn prepare_windows_steamcmd(state: &AppState) -> io::Result<CommandSpec> {
+    use crate::infra::{
+        fs_paths::{safe_ensure_dir_path, safe_overwrite_file_path},
+        http_client::HttpRequest,
+    };
+
+    let steamcmd_dir = state.root_path.join("steamcmd");
+    let program = steamcmd_dir.join("steamcmd.exe");
+    if !program.is_file() {
+        let response = state
+            .http_client
+            .send(HttpRequest::new("GET", WINDOWS_STEAMCMD_URL))
+            .await
+            .map_err(io::Error::other)?;
+        if response.status != 200 {
+            return Err(io::Error::other("SteamCMD download failed"));
+        }
+        let mut archive =
+            zip::ZipArchive::new(io::Cursor::new(response.body)).map_err(io::Error::other)?;
+        let mut entry = archive.by_name("steamcmd.exe").map_err(io::Error::other)?;
+        let mut bytes = Vec::new();
+        entry.take(25 * 1024 * 1024 + 1).read_to_end(&mut bytes)?;
+        if bytes.is_empty() || bytes.len() > 25 * 1024 * 1024 {
+            return Err(io::Error::other("SteamCMD executable size is invalid"));
+        }
+        safe_ensure_dir_path(&steamcmd_dir).map_err(io::Error::other)?;
+        safe_overwrite_file_path(&program, &bytes).map_err(io::Error::other)?;
+    }
+    Ok(CommandSpec::new(program.display().to_string())
+        .with_current_dir(steamcmd_dir)
+        .arg("+force_install_dir")
+        .arg(
+            state
+                .root_path
+                .join("dst-dedicated-server")
+                .display()
+                .to_string(),
+        )
+        .arg("+login")
+        .arg("anonymous")
+        .arg("+app_update")
+        .arg("343050")
+        .arg("validate")
+        .arg("+quit")
+        .with_timeout(INSTALL_TIMEOUT))
 }
 
 fn build_sse_response(events: String) -> Response {

@@ -64,7 +64,14 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Run Rust tests
-        run: cargo test --locked
+        shell: pwsh
+        run: |
+          cargo test --locked 2>&1 | Tee-Object -FilePath cargo-test.log
+          if ($LASTEXITCODE -ne 0) {
+            $tail = (Get-Content cargo-test.log -Tail 100) -join '%0A'
+            Write-Output "::error::$tail"
+            exit 1
+          }
 
       - name: Build Windows binary
         run: cargo build --locked --release --bin dst-admin-rust
