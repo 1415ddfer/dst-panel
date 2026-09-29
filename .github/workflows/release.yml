@@ -10,25 +10,22 @@ permissions:
 
 jobs:
   release:
-    name: Build and publish
-    runs-on: ubuntu-latest
+    name: Build and publish Windows release
+    runs-on: windows-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v7
 
       - name: Resolve release metadata
         id: release
+        shell: pwsh
         run: |
-          version="${GITHUB_REF_NAME#v}"
-          package_name="dst-panel"
-          if [ -z "${version}" ] || [ "${version}" = "${GITHUB_REF_NAME}" ]; then
-            echo "::error::Release tags must use v<version>."
-            exit 1
+          $version = '${{ github.ref_name }}'.TrimStart('v')
+          if (-not $version -or $version -eq '${{ github.ref_name }}') {
+            throw 'Release tags must use v<version>.'
           fi
-          echo "version=${version}" >> "${GITHUB_OUTPUT}"
-          echo "package_name=${package_name}" >> "${GITHUB_OUTPUT}"
-          echo "linux_archive=${package_name}.${version}.tar.gz" >> "${GITHUB_OUTPUT}"
-          echo "windows_archive=${package_name}.${version}-window.zip" >> "${GITHUB_OUTPUT}"
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "windows_archive=dst-panel.$version-windows.zip" >> $env:GITHUB_OUTPUT
 
       - name: Setup Node
         uses: actions/setup-node@v6
@@ -39,69 +36,41 @@ jobs:
 
       - name: Build frontend
         working-directory: web-ui
-        run: |
-          npm ci
-          npm run build
+        run: npm ci && npm run build
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-unknown-linux-gnu,x86_64-pc-windows-gnu
 
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
 
       - name: Validate package versions
+        shell: pwsh
         run: |
-          version="${{ steps.release.outputs.version }}"
-          cargo_version="$(cargo metadata --no-deps --format-version 1 | node -e "let input=''; process.stdin.on('data', d => input += d); process.stdin.on('end', () => { const metadata = JSON.parse(input); const pkg = metadata.packages.find((item) => item.name === 'dst-admin-rust'); console.log(pkg.version); });")"
-          frontend_version="$(node -p "require('./web-ui/package.json').version")"
-          if [ "${cargo_version}" != "${version}" ]; then
-            echo "::error::Cargo.toml version ${cargo_version} does not match tag version ${version}."
-            exit 1
-          fi
-          if [ "${frontend_version}" != "${version}" ]; then
-            echo "::error::web-ui/package.json version ${frontend_version} does not match tag version ${version}."
-            exit 1
-          fi
+          $cargoVersion = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages |
+            Where-Object name -eq 'dst-admin-rust' | Select-Object -ExpandProperty version
+          $frontendVersion = (Get-Content web-ui/package.json -Raw | ConvertFrom-Json).version
+          if ($cargoVersion -ne '${{ steps.release.outputs.version }}' -or
+              $frontendVersion -ne '${{ steps.release.outputs.version }}') {
+            throw "Package versions must match tag ${{ github.ref_name }}"
+          }
 
-      - name: Install release toolchains
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-mingw-w64-x86-64 zip
-
-      - name: Build Linux binary
-        run: RUST_TARGET=x86_64-unknown-linux-gnu ./tools/release/build-linux.sh
-
-      - name: Package Linux release
-        env:
-          PACKAGE_NAME: ${{ steps.release.outputs.package_name }}
-          VERSION: ${{ steps.release.outputs.version }}
-        run: |
-          package_dir="dist/release/linux/${PACKAGE_NAME}.${VERSION}"
-          mkdir -p "${package_dir}"
-          cp dst-admin-rust config.yml "${package_dir}/"
-          cp docker/dst_config "${package_dir}/dst_config"
-          cp -R static "${package_dir}/static"
-          cp -R web-ui/dist "${package_dir}/dist"
-          tar -czf "dist/release/${PACKAGE_NAME}.${VERSION}.tar.gz" -C dist/release/linux "${PACKAGE_NAME}.${VERSION}"
+      - name: Run Windows tests
+        run: cargo test --locked
 
       - name: Build Windows binary
-        run: RUST_TARGET=x86_64-pc-windows-gnu ./tools/release/build-windows.sh
+        run: cargo build --locked --release --bin dst-admin-rust
 
       - name: Package Windows release
-        env:
-          PACKAGE_NAME: ${{ steps.release.outputs.package_name }}
-          VERSION: ${{ steps.release.outputs.version }}
+        shell: pwsh
         run: |
-          package_dir="dist/release/windows/${PACKAGE_NAME}.${VERSION}-window"
-          mkdir -p "${package_dir}"
-          cp dst-admin-rust.exe config.yml "${package_dir}/"
-          cp docker/dst_config "${package_dir}/dst_config"
-          cp -R static "${package_dir}/static"
-          cp -R web-ui/dist "${package_dir}/dist"
-          cd dist/release/windows
-          zip -r "../${PACKAGE_NAME}.${VERSION}-window.zip" "${PACKAGE_NAME}.${VERSION}-window"
+          $packageDir = 'dist/release/dst-panel.${{ steps.release.outputs.version }}-windows'
+          New-Item -ItemType Directory -Force $packageDir | Out-Null
+          Copy-Item target/release/dst-admin-rust.exe,config.yml $packageDir
+          Copy-Item docker/dst_config (Join-Path $packageDir 'dst_config')
+          Copy-Item static (Join-Path $packageDir 'static') -Recurse
+          Copy-Item web-ui/dist (Join-Path $packageDir 'dist') -Recurse
+          Compress-Archive -Path $packageDir -DestinationPath 'dist/release/${{ steps.release.outputs.windows_archive }}'
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
@@ -111,4 +80,3 @@ jobs:
           generate_release_notes: true
           files: |
             dist/release/${{ steps.release.outputs.windows_archive }}
-            dist/release/${{ steps.release.outputs.linux_archive }}

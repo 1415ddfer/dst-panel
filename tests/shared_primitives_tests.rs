@@ -789,6 +789,41 @@ async fn windows_command_runner_executes_and_times_out() {
     assert!(start.elapsed() < Duration::from_secs(3));
 }
 
+#[cfg(windows)]
+#[tokio::test]
+async fn windows_screen_adapter_launches_and_writes_console_input() {
+    let dir = tempdir().unwrap();
+    let marker = dir.path().join("console-command.txt");
+    let escaped = marker.display().to_string().replace('\'', "''");
+    let script =
+        format!("$line = [Console]::ReadLine(); [IO.File]::WriteAllText('{escaped}', $line)");
+    let powershell = std::path::PathBuf::from(
+        std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_owned()),
+    )
+    .join("System32/WindowsPowerShell/v1.0/powershell.exe");
+    let session = "DST_8level_WindowsTest_Master";
+    let runner = TokioCommandRunner::new();
+    let launch = CommandSpec::new("screen")
+        .extend_args(["-d", "-m", "-S", session])
+        .arg(powershell.display().to_string())
+        .extend_args(["-NoProfile", "-Command"])
+        .arg(script)
+        .with_current_dir(dir.path());
+    assert_eq!(runner.run(launch).await.unwrap().status_code, Some(0));
+
+    let send = CommandSpec::new("screen")
+        .extend_args(["-S", session, "-p", "0", "-X", "stuff", "hello\n"]);
+    assert_eq!(runner.run(send).await.unwrap().status_code, Some(0));
+    for _ in 0..50 {
+        if marker.exists() {
+            assert_eq!(fs::read_to_string(marker).unwrap(), "hello");
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("Windows console command did not reach the launched process");
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn tokio_command_runner_truncates_large_stdout_without_using_shell_strings() {

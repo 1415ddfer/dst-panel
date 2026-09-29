@@ -12,6 +12,9 @@ use std::{
 };
 
 use thiserror::Error;
+
+#[cfg(windows)]
+mod windows;
 use tokio::{
     io::{AsyncRead, AsyncReadExt},
     task::{JoinError, JoinHandle},
@@ -212,6 +215,11 @@ impl TokioCommandRunner {
     }
 
     async fn run_inner(&self, spec: CommandSpec) -> Result<CommandOutput, CommandError> {
+        #[cfg(windows)]
+        if spec.program == "screen" {
+            return windows::run_screen(&spec);
+        }
+
         let timeout_ms = spec.timeout.map(|timeout| timeout.as_millis());
         if !Self::process_tree_cleanup_supported() {
             tracing::warn!(

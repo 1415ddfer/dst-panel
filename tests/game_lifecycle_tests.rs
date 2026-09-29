@@ -317,7 +317,11 @@ async fn update_game_route_stops_levels_then_runs_steamcmd_update_argv() {
         "DST_8level_ClusterUpdate_Caves",
         "c_shutdown(true)\n",
     );
-    assert!(calls[2].program().ends_with("steamcmd"));
+    assert!(calls[2].program().ends_with(if cfg!(windows) {
+        "steamcmd.exe"
+    } else {
+        "steamcmd"
+    }));
     assert_eq!(
         calls[2].current_dir(),
         Some(dir.path().join("steamcmd").as_path())
@@ -342,6 +346,7 @@ async fn update_game_route_stops_levels_then_runs_steamcmd_update_argv() {
     );
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn update_game_bin_2664_uses_depot_downloader_without_stopping_levels() {
     let runner = FakeCommandRunner::new(vec![CommandOutput::success(Vec::new(), Vec::new())]);
@@ -376,6 +381,7 @@ async fn update_game_bin_2664_uses_depot_downloader_without_stopping_levels() {
     );
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn update_game_bin_2664_rejects_running_levels_without_depotdownloader() {
     let runner = FakeCommandRunner::default();
@@ -805,6 +811,7 @@ async fn preinstall_rejects_existing_reserved_staging_directory() {
     );
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn preinstall_rejects_zip_traversal_names_before_replacing_cluster() {
     let (app, dir, _runner) = test_router(FakeCommandRunner::default()).await;

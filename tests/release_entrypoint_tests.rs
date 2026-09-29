@@ -389,16 +389,15 @@ fn github_release_workflow_builds_binary_artifacts() {
         "tags:",
         "'v*'",
         "contents: write",
-        "version=\"${GITHUB_REF_NAME#v}\"",
-        "package_name=\"dst-panel\"",
+        "runs-on: windows-latest",
         "steps.release.outputs.version",
-        "steps.release.outputs.package_name",
         "Validate package versions",
         "node-version: 24",
         "npm ci",
         "npm run build",
-        "./tools/release/build-linux.sh",
-        "./tools/release/build-windows.sh",
+        "cargo test --locked",
+        "cargo build --locked --release --bin dst-admin-rust",
+        "Compress-Archive",
         "softprops/action-gh-release",
     ] {
         assert!(
@@ -409,8 +408,8 @@ fn github_release_workflow_builds_binary_artifacts() {
     assert!(!workflow.contains("VERSION: 1.0.0"));
     assert!(!workflow.contains("dst-admin-go.1.0.0"));
     assert!(!workflow.contains("dst-admin-go.${VERSION}"));
-    assert!(workflow.contains("${PACKAGE_NAME}.${VERSION}.tar.gz"));
-    assert!(workflow.contains("${PACKAGE_NAME}.${VERSION}-window.zip"));
+    assert!(workflow.contains("dst-panel.$version-windows.zip"));
+    assert!(!workflow.contains("Build Linux binary"));
     assert!(!workflow.contains("dst-admin-go.1.6.1"));
     assert!(!workflow.contains("FROM node:24-bookworm-slim AS frontend-build"));
     assert!(!workflow.contains("docker/build-push-action"));

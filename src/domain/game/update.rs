@@ -10,7 +10,7 @@ pub(crate) async fn update_game(
     context: &LifecycleContext,
     grace_period: Duration,
 ) -> AppResult<()> {
-    if context.config.bin == 2664 {
+    if context.config.bin == 2664 && !cfg!(windows) {
         ensure_no_levels_running(process_provider, root, context)?;
     } else {
         super::start_stop::stop_all_strict(runner, process_provider, root, context, grace_period)
@@ -30,7 +30,7 @@ pub(crate) async fn update_game(
         );
         return Err(AppError::internal("update game"));
     }
-    if context.config.bin != 2664 {
+    if context.config.bin != 2664 || cfg!(windows) {
         rewrite_dedicated_server_mods_setup(root, context)?;
     }
     tracing::info!(cluster_name = %context.cluster_name, "updated DST installation");
@@ -80,7 +80,7 @@ fn rewrite_dedicated_server_mods_setup(root: &Path, context: &LifecycleContext) 
 }
 
 fn update_spec(config: &DstConfig) -> AppResult<CommandSpec> {
-    if config.bin == 2664 {
+    if config.bin == 2664 && !cfg!(windows) {
         return Ok(CommandSpec::new("./DepotDownloader")
             .with_current_dir("/opt/DepotDownloader")
             .arg("-app")

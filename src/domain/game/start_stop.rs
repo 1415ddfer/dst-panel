@@ -151,24 +151,33 @@ pub(crate) fn copy_steamclient_before_single_start(
     root: &Path,
     context: &LifecycleContext,
 ) -> AppResult<()> {
-    match copy_steamclient_before_single_start_inner(root, &context.config) {
-        Ok(()) => {
-            tracing::info!(
-                cluster_name = %context.cluster_name,
-                "copied steamclient.so before single DST start"
-            );
-        }
-        Err(error) => {
-            // Go logs these copy failures and still starts the shard. Preserve
-            // that route contract while making the skipped side effect visible.
-            tracing::warn!(
-                cluster_name = %context.cluster_name,
-                error = %error,
-                "failed to copy steamclient.so before single DST start"
-            );
-        }
+    #[cfg(windows)]
+    {
+        let _ = (root, context);
+        return Ok(());
     }
-    Ok(())
+
+    #[cfg(not(windows))]
+    {
+        match copy_steamclient_before_single_start_inner(root, &context.config) {
+            Ok(()) => {
+                tracing::info!(
+                    cluster_name = %context.cluster_name,
+                    "copied steamclient.so before single DST start"
+                );
+            }
+            Err(error) => {
+                // Go logs these copy failures and still starts the shard. Preserve
+                // that route contract while making the skipped side effect visible.
+                tracing::warn!(
+                    cluster_name = %context.cluster_name,
+                    error = %error,
+                    "failed to copy steamclient.so before single DST start"
+                );
+            }
+        }
+        Ok(())
+    }
 }
 
 async fn launch_level(
@@ -178,8 +187,9 @@ async fn launch_level(
     level_name: &str,
 ) -> AppResult<()> {
     ensure_level_files_before_launch(root, context, level_name)?;
-    let spec = launch_level_spec(context, level_name)?;
-    run_go_lenient(
+    let spec = launch_level_spec(root, context, level_name)?;
+    #[cfg(windows)]
+    return run_go_strict(
         runner,
         spec,
         "start-level",
@@ -187,7 +197,19 @@ async fn launch_level(
         level_name,
     )
     .await;
-    Ok(())
+
+    #[cfg(not(windows))]
+    {
+        run_go_lenient(
+            runner,
+            spec,
+            "start-level",
+            &context.cluster_name,
+            level_name,
+        )
+        .await;
+        Ok(())
+    }
 }
 
 fn ensure_level_files_before_launch(
@@ -329,7 +351,11 @@ fn next_level_port(
         + 1
 }
 
-fn launch_level_spec(context: &LifecycleContext, level_name: &str) -> AppResult<CommandSpec> {
+fn launch_level_spec(
+    root: &Path,
+    context: &LifecycleContext,
+    level_name: &str,
+) -> AppResult<CommandSpec> {
     let (current_dir, binary_args) = binary_and_wrapper_args(&context.config)?;
     let mut spec = CommandSpec::new(SCREEN_PROGRAM)
         .arg("-d")
@@ -355,6 +381,10 @@ fn launch_level_spec(context: &LifecycleContext, level_name: &str) -> AppResult<
         spec = spec
             .arg("-persistent_storage_root")
             .arg(&context.config.persistent_storage_root);
+    } else if cfg!(windows) {
+        spec = spec
+            .arg("-persistent_storage_root")
+            .arg(root.join(".klei").display().to_string());
     }
     if !context.config.conf_dir.is_empty() {
         spec = spec.arg("-conf_dir").arg(&context.config.conf_dir);
@@ -409,10 +439,21 @@ async fn kill_level_if_still_running(
 }
 
 fn kill_level_spec(pid: u32) -> CommandSpec {
-    CommandSpec::new("kill")
-        .arg("-9")
+    #[cfg(windows)]
+    return CommandSpec::new("taskkill.exe")
+        .arg("/PID")
         .arg(pid.to_string())
-        .with_timeout(Duration::from_secs(10))
+        .arg("/T")
+        .arg("/F")
+        .with_timeout(Duration::from_secs(10));
+
+    #[cfg(not(windows))]
+    {
+        CommandSpec::new("kill")
+            .arg("-9")
+            .arg(pid.to_string())
+            .with_timeout(Duration::from_secs(10))
+    }
 }
 
 fn ensure_level_stopped(
@@ -442,40 +483,53 @@ fn ensure_level_stopped(
 
 fn binary_and_wrapper_args(config: &DstConfig) -> AppResult<(std::path::PathBuf, Vec<String>)> {
     let install_dir = install_dir(config);
-    let bin64 = install_dir.join("bin64");
-    let bin32 = install_dir.join("bin");
-    let (current_dir, args) = match config.bin {
-        64 => (
-            bin64,
-            vec!["./dontstarve_dedicated_server_nullrenderer_x64".to_owned()],
-        ),
-        100 => (
-            bin64,
-            vec!["./dontstarve_dedicated_server_nullrenderer_x64_luajit".to_owned()],
-        ),
-        86 => (
-            bin64,
-            vec![
-                "box86".to_owned(),
-                "./dontstarve_dedicated_server_nullrenderer_x64".to_owned(),
-            ],
-        ),
-        2664 => (
-            bin64,
-            vec![
-                "box64".to_owned(),
-                "./dontstarve_dedicated_server_nullrenderer_x64".to_owned(),
-            ],
-        ),
-        _ => (
-            bin32,
-            vec!["./dontstarve_dedicated_server_nullrenderer".to_owned()],
-        ),
-    };
-    if args.iter().any(|arg| arg.contains('\0')) {
-        return Err(AppError::bad_request(
-            "install path contains unsafe characters",
-        ));
+    #[cfg(windows)]
+    {
+        let (directory, executable) = if config.bin == 32 {
+            ("bin", "dontstarve_dedicated_server_nullrenderer.exe")
+        } else {
+            ("bin64", "dontstarve_dedicated_server_nullrenderer_x64.exe")
+        };
+        return Ok((install_dir.join(directory), vec![executable.to_owned()]));
     }
-    Ok((current_dir, args))
+
+    #[cfg(not(windows))]
+    {
+        let bin64 = install_dir.join("bin64");
+        let bin32 = install_dir.join("bin");
+        let (current_dir, args) = match config.bin {
+            64 => (
+                bin64,
+                vec!["./dontstarve_dedicated_server_nullrenderer_x64".to_owned()],
+            ),
+            100 => (
+                bin64,
+                vec!["./dontstarve_dedicated_server_nullrenderer_x64_luajit".to_owned()],
+            ),
+            86 => (
+                bin64,
+                vec![
+                    "box86".to_owned(),
+                    "./dontstarve_dedicated_server_nullrenderer_x64".to_owned(),
+                ],
+            ),
+            2664 => (
+                bin64,
+                vec![
+                    "box64".to_owned(),
+                    "./dontstarve_dedicated_server_nullrenderer_x64".to_owned(),
+                ],
+            ),
+            _ => (
+                bin32,
+                vec!["./dontstarve_dedicated_server_nullrenderer".to_owned()],
+            ),
+        };
+        if args.iter().any(|arg| arg.contains('\0')) {
+            return Err(AppError::bad_request(
+                "install path contains unsafe characters",
+            ));
+        }
+        Ok((current_dir, args))
+    }
 }
