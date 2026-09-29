@@ -765,6 +765,30 @@ fn tokio_command_runner_exposes_process_tree_cleanup_support() {
     );
 }
 
+#[cfg(windows)]
+#[tokio::test]
+async fn windows_command_runner_executes_and_times_out() {
+    let runner = TokioCommandRunner::new();
+    let output = runner
+        .run(CommandSpec::new("cmd.exe").extend_args(["/C", "echo ready"]))
+        .await
+        .unwrap();
+    assert_eq!(output.status_code, Some(0));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("ready"));
+
+    let start = Instant::now();
+    let error = runner
+        .run(
+            CommandSpec::new("powershell.exe")
+                .extend_args(["-NoProfile", "-Command", "Start-Sleep -Seconds 5"])
+                .with_timeout(Duration::from_millis(300)),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(error, CommandError::Timeout));
+    assert!(start.elapsed() < Duration::from_secs(3));
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn tokio_command_runner_truncates_large_stdout_without_using_shell_strings() {
